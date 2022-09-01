@@ -1,0 +1,202 @@
+---
+title: "r_training"
+output: html_document
+date: '2022-07-19'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# load packages
+```{r}
+library(lubridate)
+library(here)
+library(rio)
+library(tidyverse)
+library(linelist)
+library(remotes)
+library(janitor)
+library(knitr)
+library(kableExtra)
+library(skimr)
+library(DescTools)
+library(flextable)
+library(readxl)
+library(dplyr)
+library(gtsummary)
+library(officer)
+library(scales)
+library(tidyr)
+```
+# Exercice import data
+```{r}
+here()
+
+covid19 <- here("data", "raw", "Base_dépistage_centres_de_santé_-_all_versions_-_labels_-_2022-08-30-14-56-25.xlsx") %>% 
+    import() %>% 
+    as_tibble() %>% 
+    clean_variable_names()
+
+tab_summary <- covid19 %>% 
+  mutate(age_annee=ifelse(unite_de_l_age_du_cas_suspect=="Ans", age_du_cas_suspect,age_du_cas_suspect/12))
+  
+View(covid19)
+names(tab_summary)
+
+```
+### select your data (calculate any variables you like inside summary)
+```{r}
+table2<-tab_summary %>% 
+  group_by(resultats_du_test) %>%
+   summarise(
+    cases = n(),
+    average_age = round(mean(age_du_cas_suspect),2),
+    max_age = max(age_du_cas_suspect), 
+    femme= sum(sexe=="femme", na.rm=T),
+    homme = sum(sexe=="homme", na.rm=T),
+    pct_femmes = scales::percent(femme / cases),
+    cfr         = scales::percent(sum(resultats_du_test == "Positif",na.rm =T)/cases)
+  ) %>% 
+  adorn_totals()
+view(table2)
+
+## add flextable to your table2
+
+table2%>% 
+  flextable() %>%   
+  autofit()  %>% 
+  bold(~ pct_femmes  == max(pct_femmes),7)%>% 
+  bg(i = ~ average_age  == max(average_age), 
+     j = 3,
+     bg="pink")
+
+## write to docx
+
+setwd(here::here("outputs"))
+
+sect_properties <- prop_section(
+  page_size = page_size(orient = "landscape"),
+  type = "continuous",
+  page_margins = page_mar()
+)
+
+save_as_docx('tableau des resutltats' = table2, path = "Tableau des resultats1.docx",
+             pr_section =sect_properties)
+
+```
+# Travaux J1 Merge data
+```{r}
+cholera_boutou <- here("data", "raw","cholera_boutou_2019_10_21.xlsx") %>% 
+import() %>% 
+as_tibble() %>% 
+clean_variable_names()
+
+cholera_Paloli <- here("data", "raw","cholera_paloli_2019_10_21.xlsx") %>% 
+import() %>% 
+as_tibble() %>% 
+clean_variable_names()
+
+cholera_Paloli$date_enregistrement <- as.character(cholera_Paloli$date_enregistrement)
+
+cholera_gondwana_merged <- union_all(cholera_boutou,cholera_Paloli) %>% 
+clean_dates()
+
+export(cholera_gondwana_merged,file=here("data/cleaned/cholera_gondwana_merged.csv"))
+
+```
+# import cleaning_rules
+```{r}
+cleaning_rules <- here("data","cleaned","cleaning_rules.xlsx") %>% 
+import() %>% 
+as_tibble()
+
+cholera_gondwana_merged1 <- clean_variable_spelling(cholera_gondwana_merged,wordlists=cleaning_rules)
+
+export(cholera_gondwana_merged1,file = here("data/cleaned/cholera_gondwana_merged1.xlsx"))
+
+```
+# travaux J2
+```{r}
+cholera %>% 
+  select(age_cas,sexe,evolution) %>% 
+tbl_summary(by = evolution) %>% 
+  add_stat_label()
+
+```
+# use dpyr a tailored descriptive table
+
+```{r}
+library(flextable)
+cholera %>% 
+  group_by(aire_sante_res) %>% 
+  summarise(
+cases=n(),
+average_age=round(mean(age_cas),2),
+max_age=max(age_cas),
+female = sum(sexe=="F",na.rm = T),
+male = sum(sexe=="M",na.rm = T),
+pct_females=scales::percent(female / cases),
+pct_males=scales::percent(male / cases),
+taux_deces =scales::percent(sum(evolution=="Decede",na.rm=T)/cases)
+) %>% 
+  adorn_totals() %>% 
+  flextable() %>% 
+  autofit() %>% 
+bold(~ pct_females==max(pct_females),7) %>% 
+  bg(i= ~ average_age == max(average_age),
+     j=3,
+  bg= "green")
+
+table(cholera$age_cas)
+
+tab_age <- cholera %>% 
+  select(aire_sante_res,age_cas) %>% 
+  mutate(age_cas = replace(age_cas, age_cas == -8,8)) %>% 
+  mutate(age_group=cut(age_cas, breaks=c(0,9,19,29,39,49,59,69,79,89))) %>% 
+  count(age_group,aire_sante_res) %>% 
+  group_by(age_group) %>% 
+  spread(aire_sante_res,n,fill=0) %>% 
+  adorn_totals()
+
+tab_age %>% 
+  flextable()
+
+
+```
+
+
+# Organise cols 
+```{r}
+table1 <- cholera %>% 
+  pivot_longer(cols= diarrhee:nausees, names_to = "symptoms",
+               values_to = "Response") %>% 
+  group_by(symptoms) %>% 
+  summarise(
+    count = sum(Response== "Oui"),
+    pct_cases=scales::percent(sum(Response=="Oui")/167),
+   female= sum(Response == "Oui" & sexe == "F", na.rm = T)
+     ) %>% 
+  flextable()
+
+setwd(here::here("outputs"))
+
+sect_properties <- prop_section(
+  page_size = page_size(orient = "landscape",
+                        width = 8.3, height = 11.7),
+  type = "continuous",
+  page_margins = page_mar()
+)
+
+# table Aire de Santé
+
+save_as_docx(Aire_de_sante_Cases_table = table1, path="Aire de Sante Table.docx", pr_section=sect_properties)
+
+```
+# Travaux du jour3
+```{r}
+
+
+```
+
+
